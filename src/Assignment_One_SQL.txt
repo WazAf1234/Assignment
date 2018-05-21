@@ -1,0 +1,68 @@
+/**************************************************************
+***Author : Bhushan Jain
+***Title : ShutterFly Assignment
+**************************************************************/
+
+-- For calculating CLTV ( Customer Life Time Value ), I am using the below schema
+
+1) Users table 
+2) Payments table
+
+===========================================
+CREATE TABLE Users
+(User_Id int NOT NULL,
+Service_Used Varchar(200) NOT NULL,
+Signed_Up_Date DATE,
+PRIMARK KEY (User_id, Service_Used));
+
+===========================================
+Sample Records: Users
+===========================================
+User_Id		Service_Used 	 Signed_Up_Date
+1			PhotoBooks		 2017-09-09
+2			PhotoBooks		 2018-01-01
+3			Calendars		 2011-09-09
+4			Gloss Covers	 2015-12-12
+1		    Calendars        2013-08-07
+3			T's				 2014-05-09
+7			Gloss Covers	 2018-05-08
+
+=======================================================
+CREATE TABLE Payments
+(Payment_Id int NOT NULL PRIMARY KEY,
+Amount Double,
+Payment_Date Date,
+User_Id int NOT NULL,
+Service_Used
+FOREIGN KEY fk1 REFERENCES Users(User_Id, Service_Used));
+
+=======================================================================
+Sample Records: Payments
+=======================================================================
+Payment_Id		Amount		Payment_Date		User_Id		Service_Used
+10021			129.98		2018-05-08			7			Gloss Covers
+10090			99.00		2013-08-07			1			Calendars
+12123			99.00		2013-08-07			1			Calendars
+20098			1.88		2015-12-12			4			Gloss Covers
+67868			999.81		2017-09-09			1			PhotoBooks
+42435			1.00		2011-09-09			3			Calendars		
+
+
+-- Customer Life Time Value is purchases made by Customer Till Date
+-- Below query gives the CLTV in Descending Order
+
+========================================
+SELECT SUM(Amount) CLTV_Amount, User_Id
+FROM Payments 
+GROUP BY User_Id
+ORDER BY 1 DESC;
+
+=======================
+Sample Output:
+=======================
+CLTV_Amount		User_Id
+1198.81			1
+129.88			7
+1.88			4
+1.00			3
+
