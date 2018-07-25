@@ -1,6 +1,6 @@
 /**************************************************************
 ***Author : Bhushan Jain
-***Title : ShutterFly Assignment
+***Title : Assignment
 **************************************************************/
 
 -- For calculating CLTV ( Customer Life Time Value ), I am using the below schema
