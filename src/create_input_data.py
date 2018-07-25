@@ -1,6 +1,6 @@
 """
 Author : Bhushan Jain
-Title : ShutterFly Assignment
+Title :  Assignment
 """
 
 import random
