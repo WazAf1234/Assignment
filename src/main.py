@@ -1,6 +1,6 @@
 """
 Author : Bhushan Jain
-Title : ShutterFly Assignment
+Title :  Assignment
 """
 
 from dateutil.parser import parse as date_parser
