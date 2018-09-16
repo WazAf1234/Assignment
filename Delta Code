@@ -1,0 +1,224 @@
+from pyspark.sql.functions import *
+
+class GenericIncremental:
+
+    def __init__(self, source_bucket_name, target_bucket_name, keyConfigS3, mapperConfigS3, defaultValueConfigS3):
+        self.defaultValueConfigS3 = defaultValueConfigS3
+        self.mapperConfigS3 = mapperConfigS3
+        self.keyConfigS3 = keyConfigS3
+        self.dfInitial = ""
+        self.dfIncremental = ""
+        self.dfKeyConfig = ""
+        self.dfMapperConfig = ""
+        self.dfValueConfig = ""
+        self.source_bucket_name = source_bucket_name
+        self.bucket = dbutils.fs.ls("/mnt/%s" % self.source_bucket_name)
+        self.directory_path = ""
+        self.current_folder_name = ""
+        self.previous_folder_name = ""
+        self.target_bucket_name = target_bucket_name
+        self.retailerName = ""
+
+    def load_config(self):
+        import pandas as pd
+        import json
+        self.dfKeyConfig = pd.read_json(self.keyConfigS3)
+        self.dfMapperConfig = pd.read_json(self.mapperConfigS3)
+        self.dfValueConfig = pd.read_json(self.defaultValueConfigS3)
+        retailerList = self.dfKeyConfig.to_dict()
+        print(len(retailerList))
+        for retailerName in ["Overstock.com"]:
+            self.retailerName = retailerName
+            self.extract_attributes(self.retailerName, self.dfKeyConfig, self.dfMapperConfig, self.dfValueConfig)
+            self.pre_process(self.retailerName, self.dfKeyConfig, self.dfMapperConfig, self.dfValueConfig)
+
+    def pre_process(self, retailerName, dfKeyConfig, dfMapperConfig, dfValueConfig):
+        retailerDict = dfKeyConfig.to_dict()
+        renameDict = dfMapperConfig[self.retailerName].to_dict()
+        defaultColDict = dfValueConfig[self.retailerName].to_dict()
+        self.dfIncremental = spark.read.option("infer_schema", "true").option("delimiter", "\t").option("header",
+                                                                                                        "true").csv(
+            self.current_folder_name + "*.txt")
+        self.dfInitial = spark.read.option("infer_schema", "true").option("delimiter", "\t").option("header",
+                                                                                                    "true").csv(
+            self.previous_folder_name + "*.txt")
+        print("TEST", self.dfInitial.count(), "  ",self.dfIncremental.count())
+        joinColClause = self.dfInitial
+        #logics for columns
+        import pyspark.sql.functions as f
+        split_col = f.split(joinColClause['ADVERTISERCATEGORY'], " ")
+        joinColClause = joinColClause.withColumn('department', split_col.getItem(0)).withColumn('salePrice',joinColClause.PRICE).withColumn('basePrice',joinColClause.PRICE)\
+                .withColumn("retailerCategory", f.regexp_replace(joinColClause.ADVERTISERCATEGORY," \ "," > "))
+        for keys in renameDict.keys():
+            joinColClause = joinColClause.withColumnRenamed(keys, renameDict[keys])
+        defClause = joinColClause
+        for keys in defaultColDict.keys():
+            defClause = defClause.withColumn(keys, f.lit(defaultColDict[keys]))
+        self.dfInitial = defClause
+        joinColClause = self.dfIncremental
+        split_col = f.split(joinColClause['ADVERTISERCATEGORY'], " ")
+        joinColClause = joinColClause.withColumn('department', split_col.getItem(0)).withColumn('salePrice',joinColClause.PRICE).withColumn('basePrice',joinColClause.PRICE)\
+                .withColumn("retailerCategory", f.regexp_replace(joinColClause.ADVERTISERCATEGORY," \ "," > "))
+        for keys in renameDict.keys():
+            joinColClause = joinColClause.withColumnRenamed(keys, renameDict[keys])
+        defClause = joinColClause
+        for keys in defaultColDict.keys():
+            defClause = defClause.withColumn(keys, f.lit(defaultColDict[keys]))
+        self.dfIncremental = defClause
+        #self.dfInitial.show()
+        #self.dfIncremental.show()
+        return self.dfJoinClause(retailerName, self.keyList, self.freqString)
+
+    def dfJoinClause(self, retailerName, keyList, freqString):
+        if len(keyList) == 1:
+            joinClause = (self.dfInitial[keyList[0]] == self.dfIncremental[keyList[0]])
+            return self.df_Create(joinClause)
+        elif len(keyList) > 1:
+            joinClause = (self.dfInitial[keyList[0]] == self.dfIncremental[keyList[0]])
+            for i in range(1, len(keyList)):
+                joinClause = joinClause & (self.dfInitial[keyList[i]] == self.dfIncremental[keyList[i]])
+                return self.df_Create(joinClause)
+        else:
+            pass
+
+    def df_Create(self, joinClause):
+        # New Inserts
+        dfNewInsert = self.dfInitial.join(self.dfIncremental, joinClause, how='right').filter(
+            self.dfInitial.SKU.isNull()).select(
+            self.dfIncremental.productDescription, self.dfIncremental.gender, self.dfIncremental.price,
+            self.dfIncremental.SKU, self.dfIncremental.UPC, self.dfIncremental.MPN
+            , self.dfIncremental.Color, self.dfIncremental.productName, self.dfIncremental.currency,
+            self.dfIncremental.brandName, self.dfIncremental.basePrice, self.dfIncremental.department,
+            self.dfIncremental.affiliateUrl, self.dfIncremental.retailerCategory, self.dfIncremental.salePrice,
+            self.dfIncremental.size, self.dfIncremental.age, self.dfIncremental.style
+            , self.dfIncremental.isbn, self.dfIncremental.author, self.dfIncremental.artist,
+            self.dfIncremental.mediaTitle, self.dfIncremental.skuCondition, self.dfIncremental.source
+            , self.dfIncremental.mediaFormat, self.dfIncremental.productUrl, self.dfIncremental.images)
+
+        # Old Deletes
+        dfOldDelete = self.dfInitial.join(self.dfIncremental, joinClause, how='left').filter(
+            self.dfIncremental.SKU.isNull()).select(self.dfInitial.productDescription, self.dfInitial.gender,
+                                                    self.dfInitial.price, self.dfInitial.SKU, self.dfInitial.UPC,
+                                                    self.dfInitial.MPN, self.dfInitial.Color, self.dfInitial.productName
+                                                    , self.dfInitial.currency, self.dfInitial.brandName,
+                                                    self.dfInitial.basePrice, self.dfInitial.department,
+                                                    self.dfInitial.affiliateUrl, self.dfInitial.retailerCategory,
+                                                    self.dfInitial.salePrice
+                                                    , self.dfInitial.size, self.dfInitial.age, self.dfInitial.style,
+                                                    self.dfInitial.isbn, self.dfInitial.author, self.dfInitial.artist,
+                                                    self.dfInitial.mediaTitle, self.dfInitial.skuCondition,
+                                                    self.dfInitial.source
+                                                    , self.dfInitial.mediaFormat, self.dfInitial.productUrl,
+                                                    self.dfInitial.images)
+
+        # Updates
+        dfUpdates = self.dfInitial.join(self.dfIncremental, joinClause).where(
+            (self.dfInitial.productDescription != self.dfIncremental.productDescription)
+            | (self.dfInitial.gender != self.dfIncremental.gender) | (self.dfInitial.price != self.dfIncremental.price)
+            # | (self.dfInitial.UPC != self.dfIncremental.UPC) | (self.dfInitial.MPN != self.dfIncremental.MPN) \
+            | (self.dfInitial.productName != self.dfIncremental.productName) | (
+                    self.dfInitial.currency != self.dfIncremental.currency) | (
+                    self.dfInitial.brandName != self.dfIncremental.brandName)
+            | (self.dfInitial.basePrice != self.dfIncremental.basePrice) | (
+                    self.dfInitial.department != self.dfIncremental.department) | (
+                    self.dfInitial.affiliateUrl != self.dfIncremental.affiliateUrl)
+            | (self.dfInitial.retailerCategory != self.dfIncremental.retailerCategory) | (
+                    self.dfInitial.salePrice != self.dfIncremental.salePrice) | (
+                    self.dfInitial.size != self.dfIncremental.size)
+            | (self.dfInitial.age != self.dfIncremental.age) | (self.dfInitial.style != self.dfIncremental.style) | (
+                    self.dfInitial.isbn != self.dfIncremental.isbn) | (
+                    self.dfInitial.author != self.dfIncremental.author)
+            | (self.dfInitial.artist != self.dfIncremental.artist) | (
+                    self.dfInitial.mediaTitle != self.dfIncremental.mediaTitle) | (
+                    self.dfInitial.skuCondition != self.dfIncremental.skuCondition)
+            | (self.dfInitial.source != self.dfIncremental.source) | (
+                    self.dfInitial.mediaFormat != self.dfIncremental.mediaFormat) | (
+                    self.dfInitial.productUrl != self.dfIncremental.productUrl)
+            | (self.dfInitial.images != self.dfIncremental.images)).select(self.dfIncremental.productDescription,
+                                                                           self.dfIncremental.gender,
+                                                                           self.dfIncremental.price,
+                                                                           self.dfIncremental.SKU
+                                                                           , self.dfIncremental.UPC,
+                                                                           self.dfIncremental.MPN,
+                                                                           self.dfIncremental.Color,
+                                                                           self.dfIncremental.productName,
+                                                                           self.dfIncremental.currency,
+                                                                           self.dfIncremental.brandName,
+                                                                           self.dfIncremental.basePrice
+                                                                           , self.dfIncremental.department,
+                                                                           self.dfIncremental.affiliateUrl,
+                                                                           self.dfIncremental.retailerCategory,
+                                                                           self.dfIncremental.salePrice,
+                                                                           self.dfIncremental.size,
+                                                                           self.dfIncremental.age
+                                                                           , self.dfIncremental.style,
+                                                                           self.dfIncremental.isbn,
+                                                                           self.dfIncremental.author,
+                                                                           self.dfIncremental.artist,
+                                                                           self.dfIncremental.mediaTitle,
+                                                                           self.dfIncremental.skuCondition
+                                                                           , self.dfIncremental.source,
+                                                                           self.dfIncremental.mediaFormat,
+                                                                           self.dfIncremental.productUrl,
+                                                                           self.dfIncremental.images)
+
+        print(dfUpdates.count(), " ", dfOldDelete.count(), " ", dfNewInsert.count())
+        self.merge_data(dfNewInsert,dfOldDelete,dfUpdates)
+
+    def extract_attributes(self, retailerName, dfKeyConfig, dfMapperConfig, dfValueConfig):
+        retailerDict = dfKeyConfig.to_dict()
+        self.keyList = []
+        self.keyList.append(retailerDict[retailerName]["key"])
+        self.freqString = int(retailerDict[retailerName]["frequency"])
+        self.directory_path = self.bucket[0][0][
+                              0:self.bucket[0][0][0:self.bucket[0][0].rfind("/") - 1].rfind("/")] + "/"
+        from datetime import datetime, timedelta
+        import datetime
+        self.current_date = str(datetime.date.today())
+        self.current_folder_name = self.directory_path + self.current_date + "/" + retailerName + "/"
+        self.previous_date = str(datetime.date.today() - datetime.timedelta(int(self.freqString)))
+        self.previous_folder_name = self.directory_path + self.previous_date + "/" + retailerName + "/"
+        
+    def merge_data(self,dfNewInsert,dfOldDelete,dfUpdates):
+        from pyspark.sql.functions import current_date
+        from pyspark.sql.functions import lit
+        tagUpdate = "Update"
+        tagInsert = "Insert"
+        tagDelete = "Delete"
+        self.dfInsertUpdates = dfUpdates.distinct().union(dfNewInsert).distinct()
+        self.dfDeletes = dfOldDelete.distinct()
+        print("Inserts/Updates Detla Counts : ",self.dfInsertUpdates.count(), " Deletes Delta Counts : ",self.dfDeletes.count())
+        self.load_delta_file()   
+        
+    def load_delta_file(self):
+        try:
+          k = dbutils.fs.ls("/mnt/%s" % self.target_bucket_name)
+          target_dir_path = k[0][0][0:k[0][0][0:k[0][0].rfind("/")-1].rfind("/")] + "/publisher_exports" + "/" + self.retailerName + "/" + self.current_date  + "/"
+          insert_updates = "Updated"
+          deletes = "Deleted"
+          self.dfInsertUpdates.coalesce(1).write.format('com.databricks.spark.csv').save(target_dir_path + insert_updates,inferSchema='true',header = 'true')
+          self.file_move(target_dir_path, "Updated")
+          #dbutils.fs.rm(self.current_folder_name + "InsertUpdates")
+          self.dfDeletes.coalesce(1).write.format('com.databricks.spark.csv').save(target_dir_path + deletes,inferSchema='true',header = 'true')
+          #self.file_move(self.current_folder_name, "Deletes")
+          #dbutils.fs.rm(self.current_folder_name + "Deletes")
+        except:
+          print("loads file err")   
+          
+    def file_move(self,target_dir_path, operation_tag):
+    # Moving and Renaming the files
+      try:
+        folder_name = target_dir_path + operation_tag + "/"
+        name_list = []
+        curr_folder = dbutils.fs.ls(folder_name)
+        for i in range(0, len(curr_folder)):
+          name_list.append(curr_folder[i][0])
+        for j in name_list:
+          if str(j[-4:]) in (".csv",".txt",".zip"):
+            new_name = operation_tag + "_Delta.csv"
+            dbutils.fs.cp(j,new_name)
+            #dbutils.fs.rm(j)
+          else:
+            dbutils.fs.rm(j)        
+      except:
+        print("Error in File Move")     
